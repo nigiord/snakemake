@@ -792,6 +792,12 @@ def auto_report(dag, path, stylesheet=None):
     {% endfor %}
     """
     )
+    # For some reasons dictsort does not work so we sort categories manually
+    results = {
+        k: {
+            sk: sv for sk, sv in sorted(v.items())
+        } for k, v in sorted(results.items())
+    }
     for cat, subcats in results.items():
         for subcat, catresults in subcats.items():
             for res in catresults:
