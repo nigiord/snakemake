@@ -3,8 +3,6 @@ __copyright__ = "Copyright 2023, Johannes Köster"
 __email__ = "johannes.koester@protonmail.com"
 __license__ = "MIT"
 
-import concurrent.futures
-import contextlib
 import itertools
 import math
 import operator
@@ -12,7 +10,6 @@ import platform
 import hashlib
 import inspect
 import sys
-import threading
 import uuid
 import os
 import asyncio
@@ -20,29 +17,39 @@ import collections
 from pathlib import Path
 
 from snakemake._version import get_versions
-from snakemake.common.tbdstring import TBDString
+
+from snakemake_interface_common.exceptions import WorkflowError
 
 __version__ = get_versions()["version"]
 del get_versions
 
 
 MIN_PY_VERSION = (3, 7)
-DYNAMIC_FILL = "__snakemake_dynamic__"
 UUID_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "https://snakemake.readthedocs.io")
 NOTHING_TO_BE_DONE_MSG = (
     "Nothing to be done (all requested files are present and up to date)."
 )
-RERUN_TRIGGERS = ["mtime", "params", "input", "software-env", "code"]
 
 ON_WINDOWS = platform.system() == "Windows"
 # limit the number of input/output files list in job properties
 # see https://github.com/snakemake/snakemake/issues/2097
 IO_PROP_LIMIT = 100
+SNAKEFILE_CHOICES = list(
+    map(
+        Path,
+        (
+            "Snakefile",
+            "snakefile",
+            "workflow/Snakefile",
+            "workflow/snakefile",
+        ),
+    )
+)
 
 
 def get_snakemake_searchpaths():
     paths = [str(Path(__file__).parent.parent.parent)] + [
-        path for path in sys.path if path.endswith("site-packages")
+        path for path in sys.path if os.path.isdir(path)
     ]
     return list(unique_justseen(paths))
 
@@ -56,6 +63,7 @@ def parse_key_value_arg(arg, errmsg):
         key, val = arg.split("=", 1)
     except ValueError:
         raise ValueError(errmsg + f" (Unparseable value: {repr(arg)})")
+    val = val.strip("'\"")
     return key, val
 
 
@@ -75,11 +83,16 @@ def async_run(coroutine):
          https://stackoverflow.com/a/65696398
     """
     try:
-        _ = asyncio.get_running_loop()
-    except RuntimeError:
-        asyncio.run(coroutine)
-    else:
-        asyncio.create_task(coroutine)
+        return asyncio.run(coroutine)
+    except RuntimeError as e:
+        coroutine.close()
+        raise WorkflowError(
+            "Error running coroutine in event loop. Snakemake currently does not "
+            "support being executed from an already running event loop. "
+            "If you run Snakemake e.g. from a Jupyter notebook, make sure to spawn a "
+            "separate process for Snakemake.",
+            e,
+        )
 
 
 APPDIRS = None
@@ -265,25 +278,6 @@ def get_input_function_aux_params(func, candidate_params):
     func_params = get_function_params(func)
 
     return {k: v for k, v in candidate_params.items() if k in func_params}
-
-
-_pool = concurrent.futures.ThreadPoolExecutor()
-
-
-@contextlib.asynccontextmanager
-async def async_lock(_lock: threading.Lock):
-    """Use a threaded lock form threading.Lock in an async context
-
-    Necessary because asycio.Lock is not threadsafe, so only one thread can safely use
-    it at a time.
-    Source: https://stackoverflow.com/a/63425191
-    """
-    loop = asyncio.get_event_loop()
-    await loop.run_in_executor(_pool, _lock.acquire)
-    try:
-        yield  # the lock is held
-    finally:
-        _lock.release()
 
 
 def unique_justseen(iterable, key=None):

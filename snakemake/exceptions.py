@@ -7,8 +7,7 @@ import os
 import traceback
 import textwrap
 from tokenize import TokenError
-from snakemake.logging import logger
-from snakemake_interface_executor_plugins.exceptions import WorkflowError
+from snakemake_interface_common.exceptions import WorkflowError, ApiError
 
 
 def format_error(
@@ -67,11 +66,13 @@ def format_traceback(tb, linemaps):
 
 
 def log_verbose_traceback(ex):
+    from snakemake.logging import logger
+
     tb = "Full " + "".join(traceback.format_exception(type(ex), ex, ex.__traceback__))
     logger.debug(tb)
 
 
-def print_exception(ex, linemaps):
+def print_exception(ex, linemaps=None):
     """
     Print an error message for a given exception.
 
@@ -80,6 +81,8 @@ def print_exception(ex, linemaps):
     linemaps -- a dict of a dict that maps for each snakefile
         the compiled lines to source code lines in the snakefile.
     """
+    from snakemake.logging import logger
+
     log_verbose_traceback(ex)
     if isinstance(ex, SyntaxError) or isinstance(ex, IndentationError):
         logger.error(
@@ -92,7 +95,7 @@ def print_exception(ex, linemaps):
             )
         )
         return
-    origin = get_exception_origin(ex, linemaps)
+    origin = get_exception_origin(ex, linemaps) if linemaps is not None else None
     if origin is not None:
         lineno, file = origin
         logger.error(
@@ -142,6 +145,10 @@ def print_exception(ex, linemaps):
                 rule=ex.rule,
             )
         )
+    elif isinstance(ex, ApiError):
+        logger.error(f"Error: {ex}")
+    elif isinstance(ex, CliException):
+        logger.error(f"Error: {ex}")
     elif isinstance(ex, KeyboardInterrupt):
         logger.info("Cancelling snakemake on user request.")
     else:
@@ -230,15 +237,21 @@ class ChildIOException(WorkflowError):
 class IOException(RuleException):
     def __init__(self, prefix, job, files, include=None, lineno=None, snakefile=None):
         from snakemake.logging import format_wildcards
+        from snakemake.io import pretty_print_iofile
 
         msg = ""
         if files:
             msg = f"{prefix} for rule {job.rule}:"
             if job.output:
-                msg += "\n" + f"    output: {', '.join(job.output)}"
+                msg += (
+                    "\n"
+                    + f"    output: {', '.join(map(pretty_print_iofile, job.output))}"
+                )
             if job.wildcards:
                 msg += "\n" + f"    wildcards: {format_wildcards(job.wildcards)}"
-            msg += "\n    affected files:\n        " + "\n        ".join(files)
+            msg += "\n    affected files:\n        " + "\n        ".join(
+                map(pretty_print_iofile, files)
+            )
         super().__init__(
             message=msg,
             include=include,
